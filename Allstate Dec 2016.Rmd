@@ -1,0 +1,388 @@
+---
+title: "Allstate Project"
+author: "Not Olivia (the last time)"
+date: "12/12/2016"
+output: html_document
+---
+
+The following is a detailed account of my submission to the Kaggle Allstate Severity Claims competition. The goal is to predict the cost of claims, which is labeled as "loss". Model performance will be evaluated by lowest mean absolute error, which will be denoted as MAE. The methods extreme gradiant boosting and random forests with package h2o will be used on the data. 
+
+
+Packages to be used:
+
+```{r, message=FALSE}
+library(psych)
+library(corrplot)
+library(caret)
+library(dummies)
+library(xgboost)
+library(h2o)
+```
+
+**Descriptive Statistics**
+
+Reading in the data.
+
+```{r}
+all.dat <- read.csv("~/Dropbox/Predictive/train.csv")
+all.test <- read.csv("~/Dropbox/Predictive/test.csv")
+```
+
+
+```{r}
+dim(all.dat)
+dim(all.test)
+```
+
+The training set has 188,318 observations and 132 variables and the test set has 125,546 observations and 131 variables. The test set is clearly missing the response variable. 
+
+Taking a look at variable names and the structure of the data. Variable names are nondescriptive and there are over a hundred categorical variables and less than 20 continuous variables. The response is labeled "loss. 
+
+```{r, eval=FALSE}
+colnames(all.dat)
+str(all.dat)
+```
+
+Checking for missing variables. 
+
+```{r}
+val.na <- sapply(all.dat, function(x) sum(is.na(x)))
+val.na[val.na>0]
+```
+
+No missing values. 
+
+The colnames are not labeled descriptively but rather they contain the prefix of "cat" for categorical and "cont" for continuous. Using a pattern finding function, there are 116 categorical variables and 14 continuous variables. 
+
+```{r}
+c.name <- colnames(all.dat)
+index.cat <- grep("cat*", c.name)
+index.cont <- grep("cont*", c.name)
+length(index.cat)
+length(index.cont)
+```
+
+Determine the number of factor levels per categorical variable. 
+
+```{r}
+count.lvl <- NULL
+for(i in index.cat){ #for loop to determine levels by variable
+        lvl <- levels(all.dat[,i])
+        count.lvl[i] <- length(lvl)
+}
+count.lvl <- count.lvl[-1]
+data.frame("Variable"= colnames(all.dat)[index.cat], 
+           "Levels" = count.lvl)
+```
+
+If a random forest model is used, the randomForest package would not be equipped to handle factor levels above 53. This poses an issue since cat109 has 84 levels, cat110 has 131, cat113 has 61, and finally - the largest- cat116 has 326 factor levels.
+
+
+```{r}
+plot(all.dat$cat2, all.dat$loss, xlab="Cat2 Categories", 
+     ylab="Loss", main = "Boxplot of Cat2")
+```
+
+Loss has large values, making it difficult to read this boxplot, I'll perform a log tranformation on loss to better interpret the plots.
+
+```{r}
+plot(all.dat$cat2, log(all.dat$loss), xlab="Cat2 Categories", 
+     ylab="log(Loss)", main = "Boxplot of Cat2")
+```
+
+We see quite a lot of outliers, both above the third quartile and below the first quartile. It would not be helpful to plot the variables with high factor levels, but it could be useful to look at the plots of variables with 4,7,8 factors. 
+
+```{r}
+plot(all.dat$cat81, log(all.dat$loss), xlab="Cat81 Categories", 
+     ylab="log(Loss)", main = "Boxplot of Cat81")
+```
+
+Thre are four levels for cat81. There appear to more A-C levels at higher values of loss, whereas D seems to be skewed to lower values of loss. 
+
+```{r}
+plot(all.dat$cat90, log(all.dat$loss), xlab="Cat90 Categories", 
+     ylab="log(Loss)", main = "Boxplot of Cat90")
+```
+
+Cat90 also appears to to be associated with higher values of loss, with the median at about 9 for levels B-G. 
+
+
+```{r}
+plot(all.dat$cat89, log(all.dat$loss), xlab="Cat89 Categories", 
+     ylab="log(Loss)", main = "Boxplot of Cat89")
+```
+
+Cat89, with 8 levels appears to be a little more variable in that the median is not as similar across factors, as seen in the previous predictors. But it is clear that once more these categories coincide with greater values of loss, while category A is skewed towards lower values of loss.
+
+It is important to keep in mind that these boxplots explain just a few variables, and I cannot say with certainty that this trend is visible across the entire dataset. It is simply a tool to gain a better understaning of such a large dataset. 
+
+It should also be noted that since the categories and variable names do not have useful labels, feature engineering on categorical variables will not be attempted in this analysis.
+
+Additionally, given the trend seen here, it would be interesting to identify any multicollinearity. While multicollinearity is not necessarily a concern for predictive analytics, it would be helpful in determining if we wanted to do variable selection and tried to fit a parametric model on the data. 
+
+The next step is to look at the continuous variables. 
+
+```{r}
+par(mfrow=c(1,3))
+for(i in index.cont[c(1,2,3)]){
+        hist(all.dat[,i], 
+             main=paste0("cont",i),
+             xlab =paste0("cont",i) )
+}
+
+par(mfrow=c(1,3))
+for(i in index.cont[c(4,5,6)]){
+        hist(all.dat[,i], 
+             main=paste0("cont",i),
+             xlab = paste0("cont",i))
+}
+
+par(mfrow=c(1,3))
+for(i in index.cont[c(7,8,9)]){
+        hist(all.dat[,i], 
+             main=paste0("cont",i),
+             xlab = paste0("cont",i))
+}
+
+par(mfrow=c(1,3))
+for(i in index.cont[c(10,11,12)]){
+        hist(all.dat[,i], 
+             main=paste0("cont",i),
+             xlab = paste0("cont",i))
+}
+
+par(mfrow=c(1,3))
+for(i in index.cont[c(13,14)]){
+        hist(all.dat[,i], 
+             main=paste0("cont",i),
+             xlab = paste0("cont",i))
+}
+```
+
+These continuous variables have different distributions, but they all appear to be between 0 and 1 and centered around 0.5. Summary statistics would be beneficial.
+
+```{r}
+desc <- describe(all.dat[,index.cont+1], skew = F, quant=c(.25,.75))
+desc[,c(3,4,5,9,10,6)]
+```
+
+Interestingly, this data looks to be scaled already. The continuous variables, excluding loss, have essentially the same mean and standard deviation. 
+
+Additionally, we could take a closer look at the correlation of these variables. 
+
+```{r}
+c.mat <- as.matrix(all.dat[,index.cont+1])
+corrplot.mixed(corr = cor(c.mat), lower = "number", upper="circle", tl.pos="d", diag="u", title="Correlation of Continuous Variables", addshade="all", mar=c(0,0,2,0))
+```
+
+There is almost perfect positive correlation between continuous variable 11 and 12. There is also high correlation between cont6 and cont7 through cont13. 
+
+Taking a closer look at loss we see that it has a large range from 0.67 to 121,012.25. If we use parametric models we could take the log so that its distribution is more normal and less skewed. 
+
+```{r}
+hist(all.dat$loss, main="Histogram of Loss", xlab="Loss")
+```
+
+My conclusions from this data is that a nonparametric approach will be more useful in predicting loss. Since decision trees are robust methods, I will use both boosting and random forests to model the data. 
+
+The random forest method bootstraps multiple datasets from the original data and fits decision trees for each set. The trees have low correlation, however, because at each split a variable is chosen from a random subset of the p predictors. In terms of model predictions, the random forest returns the average predictions among the trees. Parameters to train are mtry (number of predictors to choose from at each split), depth (how big to grow each tree), and ntrees (number of trees).
+
+Boosting can be thought of as an extension of random forests. Instead of bootstrapping datasets, boosting grows trees sequentially. Each new tree is grown using the residuals from the previous tree. This method learns slowly and can lead to overfitting if too many trees are used. The parameters to train include lambda (a shrinkage parameter that slows the process down and leads to different shaped trees), the number of trees, and the depth of the tree. If each tree has just 1 split, the resulting model is additive and therefore more interpretable. 
+
+**Data Preparation**
+
+Since this is a large dataset, packages used for random forests and boosting (gbm) are not appropriate. Instead packages have been created to deal with big data in a more efficient manner. To prepare the data for boosting, all factor variables must be converted into numeric. That will be done by creating dummy variables for all categorical variables. 
+
+Removing ID, creating dummy variables for training and test sets together, creating training and validation sets for analysis. 
+
+```{r}
+full <- rbind(all.dat[,-c(1,132)], all.test[,-1]) # combining data and removing id and loss
+full.dum <- dummy.data.frame(data=full, sep="",
+                             verbose=F)#creating dummy variables
+test.d <- full.dum[c(188319:313864),]
+
+train.full <- full.dum[c(1:188318),]
+train.full1 <- cbind(train.full, all.dat$loss)
+
+set.seed(456)
+sub<- createDataPartition(y=train.full1[,1191], p=0.75, list=F)
+train.d <- train.full1[sub,] #training set
+val.d <- train.full1[-sub,] #validation
+```
+
+The h2o package that I will use for random forests can handle the categorical variables. The training and validation sets will be created after initializing the package. 
+
+**Random Forest**
+
+Initializing h2o and partitioning data with splitFrame function. 
+
+```{r, message=FALSE}
+h2o.init(nthreads= -1, max_mem_size="20G")
+h2o.removeAll()
+h.dat <- h2o.importFile("/Users/Steph/Dropbox/Predictive/train.csv")
+sub.h <- h2o.splitFrame(h.dat, ratios = 0.75, seed=456)
+train.h <- sub.h[[1]] #training set
+val.h <- sub.h[[2]] #validation set
+```
+
+Fitting a default random forest model.
+
+```{r}
+rf1 <- h2o.randomForest(x=2:131, y=132,
+                        training_frame = train.h,
+                        mtries=-1,
+                        ntrees=50,
+                        max_depth =5,
+                        seed = 456)
+p.rf1 <- predict(rf1, val.h)
+mean(abs(p.rf1-val.h$loss))
+h2o.shutdown(prompt=FALSE)
+```
+The default parameters for random forest yields a MAE of 1403.5. This could be improved with other parameter values. 
+
+Since mtry, the number of predictors from which to choose at each split is p/3, it could be wise to see what happens when we decrease or increase that value. As a result I will use the following values: 38,43,48,53 (decreasing and increasing the default mtry by 5 predictors). Since there are 130 variables it would be interesting to see if choosing from a larger sample improves the model.
+
+In terms of max_depth (how large to grow the tree), I will consider trees of size 10 and 20, any higher and the computation time becomes extensive. Finally, since there are 130 predictors I will include tree size of 100 and 200. 
+
+Unfortunately,the h2o package was not as efficient on my computer. The models were run on different computers to enhance speed. Code was run exactly as below with parameter values changed.  Three-fold was chosen to save computation time. 
+
+```{r, eval=F}
+rf2 <- h2o.randomForest(x=2:131, y=132,
+                        training_frame = train.h,
+                        mtries = 43, #values=38,43,48,53
+                        ntrees=200, #values=100,200
+                        max_depth = 20, #values=10,20
+                        nfolds=3)#5-fold uses too many resources
+      
+p.rf2 <- predict(rf2, val.h)
+mean(abs(p.rf2-val.h$loss))
+```
+
+Combining results into a table.
+
+```{r}
+m <- c(38,38,43,43,48,48,53,53)
+d <- rep(c(10,20),4)
+n <- rep(100,8)
+mae <- round(c(1294.55,1225.889, 1294.448, 1230.756, 1296.637, 1233.146, 1302.335, 1239.093),2)
+data.frame("mtry"= m,
+           "max.depth"= d,
+           "ntrees"= n, "MAE"=mae)
+```
+
+```{r}
+plot(m[c(1,3,5,7)], mae[c(1,3,5,7)],
+     type="l", main="MAE vs. Mtry", xlab="mtry", ylab="MAE",
+     ylim = c(1225,1380), col="red", sub="100 Trees")
+points(m[c(1,3,5,7)], mae[c(2,4,6,8)],
+       type="l", col="blue")
+legend(47,1380, legend = c("10", "20"),
+       fill=c("red", "blue"), title = "Max Depth",
+       bty="n", cex=.9)
+```
+
+For models with 100 trees and max depth of 10, it looks like mtry less than the default of 43 performs just as well as with 43. Also, a max depth of 20 led to a greater reduction of MAE, regardless of mtry. Overall, an increase in mtry over the default of 43 increases MAE.   
+
+
+```{r}
+mae2 <- round(c(1294.072, 1223.578, 1294.909, 1226.725, 1298.247, 1229.725, 1298.738, 1234.805),2)
+data.frame("mtry"= m,
+           "max.depth"= d,
+           "ntrees"= rep(200,8),
+           "MAE"= mae2)
+
+plot(m[c(1,3,5,7)], mae2[c(1,3,5,7)],
+     type="l", main="MAE vs. Mtry", xlab="mtry", ylab="MAE",
+     ylim = c(1220,1380), col="red", sub="200 Trees")
+points(m[c(1,3,5,7)],mae2[c(2,4,6,8)],
+       type="l", col="blue")
+legend(47,1380, legend = c("10", "20"),
+       fill=c("red", "blue"), title = "Max Depth",
+       bty="n", cex=.9)
+```
+
+The same trend persists with 200 trees, max depth of 20 yields lower MAE values. It doesn't look like the amount of trees is effecting the model at all. 
+
+Random forest with 38 mtry, 20 max depth, and 200 trees yields the lowest MAE on the validation set: 1223.58. The same parameters with 100 tress comes in second with MAE: 1225.89. Given that 200 trees takes more computational time, I would argue the 100-tree model would be preferred. There is not suffcient gain in MAE to warrant the extra computing time. 
+
+**Boosting**
+
+Removing the response and making dataframes into matrices for the xgboost package. 
+
+```{r}
+train.mat <- as.matrix(train.d[,-1191])
+train.y <- train.d[,1191]
+val.mat <- as.matrix(val.d[,-1191])
+```
+
+Fitting a model with default values
+
+```{r, message=FALSE}
+bst0 <- xgboost(data=train.mat, label = train.y, objective="reg:linear", 
+                max.depth=6, nround=50, eta=.3, verbose=0)
+p.bst0 <- predict(bst0, val.mat)
+mean(abs(p.bst0-val.d[,1191]))
+```
+
+MAE is 1207.766, which is smaller than the default parameters for random Forest. which was 1403.5.
+
+Since boosting runs faster than the h2o random forest models, I have tried different values for parameters. I first looked at small trees, max depth of 1-3 with 1,000 trees and a lambda of 0.001 since the number of trees is high. 
+
+The MAE was high for these models, and so I reduced eta and ntrees to 0.01 and 100 respectively. After more trial and error, 500 trees and lambda=.01. I still kept the trees small, but wanted to compare with random forests and so grew this tree to up to 10 and then 20 trees. The results follow. 
+
+Note: To knit more efficiently, the code used to run these models will not be evaluated. The code is the same, the only changes made were the parameter values: 
+
+Max depth: 1-10,20  
+N.Trees: 100,500,1,000
+lambda(eta):.001, .01
+
+
+```{r, eval=FALSE}
+bst1 <- xgboost(data=train.mat1, label = train.y, objective="reg:linear", 
+                max.depth=1, nround=1000, eta=.001, subsample=0.75)
+p.bst1 <- predict(bst1, val.mat)
+mean(abs(p.bst1-val.d$loss))
+```
+
+When nrounds=1000 I used a subsample of 75% to reduce computation time. 
+
+```{r}
+table1 <- data.frame("nRound"=c(1000,1000,1000,1000,100,100,rep(500,9)),"max.depth"= c(1,2,3,10,1,3,2,3,5,6,7,8,9,10,20), "lambda"=c(rep(.001,4), rep(.01, 11)), "MAE"= round(c(1603,1554.068,1529.011,1433.948,1601.975,1527.515,1377.213,1313.97,1246.082,1229.307,1217.401,1209.297,1203.255,1198.509,1241.206),2))
+table1
+```
+
+```{r}
+plot(table1$max.depth[7:15], table1$MAE[7:15], type="l",
+     main="MAE vs. Max Depth", ylab="MAE", xlab="Max Depth", sub = "500 Trees")
+```
+
+
+From the table it appears that the best model has a max depth of 10, with 500 trees and a lambda value of .01. Larger trees, max depth of 20, did not perform well. This is the opposite of random forests, where larger trees performed better. Even at 500 trees, the computing time for boosting was much faster than 200 random forest trees at max depth 10. 
+
+**Final Submission**
+
+Overall a gradient boosting model performed better and that will be submitted to Kaggle. 
+
+Running the model on the entire training set (validation set included).
+
+```{r}
+all.mat <- as.matrix(train.full)
+all.y <- all.dat$loss
+bst.fin <- xgboost(data=all.mat, label = all.y, objective="reg:linear", 
+                max.depth=10, nround=500, eta=.01, verbose=0)
+test.mat <- as.matrix(test.d)
+loss <- predict(bst.fin, test.mat)
+```
+
+
+```{r}
+id <- as.numeric(all.test[,1])
+final <- cbind(id, loss)
+submission <- write.csv(final, "~/Dropbox/Predictive/submission_xgb121216_rev.csv", row.names = F)
+```
+
+Kaggle rank 2209 with MAE of 1187.498. This performed better than the random forest benchmark.
+
+**Final Remarks**
+
+In the future I would write for loops for the different model parameters. I slowly started the project in pieces and so did not focus on efficiency. Additionally, I would try to combine models to improve my score. Lastly, I would evaluate other parameter values for the boosting model as it has such efficiency. 
